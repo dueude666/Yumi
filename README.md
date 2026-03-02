@@ -50,6 +50,22 @@ Default URLs:
 - API: `http://127.0.0.1:8000`
 - UI: `http://127.0.0.1:8501`
 
+## Mobile Use (Phone)
+1. Ensure phone and computer are on the same Wi-Fi.
+2. Start UI:
+```bash
+python scripts/run_ui.py
+```
+3. The script prints LAN address like `http://192.168.x.x:8501`.
+4. Open that address on your phone browser.
+
+Optional environment variables:
+- `YUMI_UI_HOST` (default `0.0.0.0`)
+- `YUMI_UI_PORT` (default `8501`)
+- `YUMI_API_HOST` (default `127.0.0.1`)
+- `YUMI_API_PORT` (default `8000`)
+- `YUMI_DEV_RELOAD` (`1` to enable API hot reload)
+
 ## Scheduling Logic
 Course priority score:
 
