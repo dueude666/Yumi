@@ -55,9 +55,52 @@ class AvailabilitySlotRequest(BaseModel):
             raise ValueError("time format must be HH:MM")
         return f"{h:02d}:{m:02d}"
 
+    @field_validator("end_time")
+    @classmethod
+    def validate_time_order(cls, value: str, info):
+        start_time = info.data.get("start_time")
+        if start_time and value <= start_time:
+            raise ValueError("end_time must be later than start_time")
+        return value
+
 
 class AvailabilityReplaceRequest(BaseModel):
     slots: List[AvailabilitySlotRequest]
+
+
+class FixedEventRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=120)
+    weekday: int = Field(ge=0, le=6)
+    start_time: str
+    end_time: str
+    event_type: str = Field(default="fixed", min_length=1, max_length=50)
+
+    @field_validator("start_time", "end_time")
+    @classmethod
+    def validate_time_format(cls, value: str) -> str:
+        parts = value.split(":")
+        if len(parts) != 2:
+            raise ValueError("time format must be HH:MM")
+        hour, minute = parts
+        if not (hour.isdigit() and minute.isdigit()):
+            raise ValueError("time format must be HH:MM")
+        h = int(hour)
+        m = int(minute)
+        if h < 0 or h > 23 or m < 0 or m > 59:
+            raise ValueError("time format must be HH:MM")
+        return f"{h:02d}:{m:02d}"
+
+    @field_validator("end_time")
+    @classmethod
+    def validate_time_order(cls, value: str, info):
+        start_time = info.data.get("start_time")
+        if start_time and value <= start_time:
+            raise ValueError("end_time must be later than start_time")
+        return value
+
+
+class FixedEventReplaceRequest(BaseModel):
+    events: List[FixedEventRequest]
 
 
 class FinalWeekPlanRequest(BaseModel):
@@ -66,4 +109,3 @@ class FinalWeekPlanRequest(BaseModel):
     deep_block_minutes: int = Field(default=90, ge=30, le=180)
     review_block_minutes: int = Field(default=30, ge=15, le=90)
     buffer_ratio: float = Field(default=0.2, ge=0, le=0.5)
-

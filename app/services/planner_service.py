@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import torch
 
@@ -21,6 +21,16 @@ class SlotRecord:
     weekday: int
     start_time: str
     end_time: str
+
+
+@dataclass
+class FixedEventRecord:
+    id: int
+    title: str
+    weekday: int
+    start_time: str
+    end_time: str
+    event_type: str
 
 
 def _parse_time(value: str) -> time:
@@ -55,6 +65,42 @@ def _take_interval(
             intervals.pop(0)
         return start_at, block_end
     return None
+
+
+def _subtract_intervals(
+    base_intervals: Sequence[Tuple[datetime, datetime]],
+    blocked_intervals: Sequence[Tuple[datetime, datetime]],
+) -> List[Tuple[datetime, datetime]]:
+    remaining: List[Tuple[datetime, datetime]] = []
+    sorted_blocked = sorted(blocked_intervals, key=lambda x: x[0])
+
+    for base_start, base_end in base_intervals:
+        fragments = [(base_start, base_end)]
+        for block_start, block_end in sorted_blocked:
+            next_fragments: List[Tuple[datetime, datetime]] = []
+            for frag_start, frag_end in fragments:
+                if block_end <= frag_start or block_start >= frag_end:
+                    next_fragments.append((frag_start, frag_end))
+                    continue
+                if frag_start < block_start:
+                    next_fragments.append((frag_start, min(block_start, frag_end)))
+                if block_end < frag_end:
+                    next_fragments.append((max(block_end, frag_start), frag_end))
+            fragments = next_fragments
+            if not fragments:
+                break
+        for frag in fragments:
+            if frag[0] < frag[1]:
+                remaining.append(frag)
+
+    remaining.sort(key=lambda x: x[0])
+    return remaining
+
+
+def _event_minutes(start_at: str, end_at: str) -> int:
+    start_dt = datetime.fromisoformat(start_at)
+    end_dt = datetime.fromisoformat(end_at)
+    return max(0, int((end_dt - start_dt).total_seconds() // 60))
 
 
 def ensure_course(conn: Any, course_name: str) -> int:
@@ -149,6 +195,73 @@ def list_availability(conn: Any) -> List[Dict[str, Any]]:
     ]
 
 
+def add_fixed_event(
+    conn: Any,
+    title: str,
+    weekday: int,
+    start_time: str,
+    end_time: str,
+    event_type: str = "fixed",
+) -> Dict[str, Any]:
+    cursor = conn.execute(
+        """
+        INSERT INTO fixed_events (title, weekday, start_time, end_time, event_type)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (title, weekday, start_time, end_time, event_type),
+    )
+    conn.commit()
+    return {
+        "fixed_event_id": int(cursor.lastrowid),
+        "title": title,
+        "weekday": weekday,
+        "start_time": start_time,
+        "end_time": end_time,
+        "event_type": event_type,
+    }
+
+
+def replace_fixed_events(conn: Any, events: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    conn.execute("DELETE FROM fixed_events")
+    for event in events:
+        conn.execute(
+            """
+            INSERT INTO fixed_events (title, weekday, start_time, end_time, event_type)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                event["title"],
+                int(event["weekday"]),
+                event["start_time"],
+                event["end_time"],
+                event.get("event_type", "fixed"),
+            ),
+        )
+    conn.commit()
+    return list_fixed_events(conn)
+
+
+def list_fixed_events(conn: Any) -> List[Dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT id, title, weekday, start_time, end_time, event_type
+        FROM fixed_events
+        ORDER BY weekday, start_time, title
+        """
+    ).fetchall()
+    return [
+        {
+            "fixed_event_id": int(row["id"]),
+            "title": row["title"],
+            "weekday": int(row["weekday"]),
+            "start_time": row["start_time"],
+            "end_time": row["end_time"],
+            "event_type": row["event_type"],
+        }
+        for row in rows
+    ]
+
+
 def _fetch_exam_records(conn: Any, start_date: date) -> List[ExamRecord]:
     rows = conn.execute(
         """
@@ -196,6 +309,28 @@ def _fetch_slots_by_weekday(conn: Any) -> Dict[int, List[SlotRecord]]:
     return result
 
 
+def _fetch_fixed_events_by_weekday(conn: Any) -> Dict[int, List[FixedEventRecord]]:
+    rows = conn.execute(
+        """
+        SELECT id, title, weekday, start_time, end_time, event_type
+        FROM fixed_events
+        ORDER BY weekday ASC, start_time ASC
+        """
+    ).fetchall()
+    result: Dict[int, List[FixedEventRecord]] = {}
+    for row in rows:
+        record = FixedEventRecord(
+            id=int(row["id"]),
+            title=row["title"],
+            weekday=int(row["weekday"]),
+            start_time=row["start_time"],
+            end_time=row["end_time"],
+            event_type=row["event_type"],
+        )
+        result.setdefault(record.weekday, []).append(record)
+    return result
+
+
 def _build_mandatory_review_map(
     exams: Sequence[ExamRecord], start_date: date, end_date: date
 ) -> Dict[date, List[ExamRecord]]:
@@ -206,6 +341,27 @@ def _build_mandatory_review_map(
             if start_date <= review_date <= end_date:
                 review_map.setdefault(review_date, []).append(exam)
     return review_map
+
+
+def _build_day_free_intervals(
+    day: date, day_slots: Sequence[SlotRecord], fixed_events: Sequence[FixedEventRecord]
+) -> List[Tuple[datetime, datetime]]:
+    available: List[Tuple[datetime, datetime]] = []
+    blocked: List[Tuple[datetime, datetime]] = []
+
+    for slot in day_slots:
+        slot_start = datetime.combine(day, _parse_time(slot.start_time))
+        slot_end = datetime.combine(day, _parse_time(slot.end_time))
+        if slot_end > slot_start:
+            available.append((slot_start, slot_end))
+
+    for event in fixed_events:
+        fixed_start = datetime.combine(day, _parse_time(event.start_time))
+        fixed_end = datetime.combine(day, _parse_time(event.end_time))
+        if fixed_end > fixed_start:
+            blocked.append((fixed_start, fixed_end))
+
+    return _subtract_intervals(available, blocked)
 
 
 def generate_final_week_plan(
@@ -224,6 +380,7 @@ def generate_final_week_plan(
     if not slots_by_weekday:
         return []
 
+    fixed_events_by_weekday = _fetch_fixed_events_by_weekday(conn)
     mandatory_reviews = _build_mandatory_review_map(exams, start_date, end_date)
     created_events: List[Dict[str, Any]] = []
 
@@ -245,16 +402,9 @@ def generate_final_week_plan(
             day += timedelta(days=1)
             continue
 
-        intervals: List[Tuple[datetime, datetime]] = []
-        total_minutes = 0
-        for slot in day_slots:
-            slot_start = datetime.combine(day, _parse_time(slot.start_time))
-            slot_end = datetime.combine(day, _parse_time(slot.end_time))
-            if slot_end <= slot_start:
-                continue
-            intervals.append((slot_start, slot_end))
-            total_minutes += int((slot_end - slot_start).total_seconds() // 60)
-
+        day_fixed_events = fixed_events_by_weekday.get(day.weekday(), [])
+        intervals = _build_day_free_intervals(day, day_slots, day_fixed_events)
+        total_minutes = sum(int((end - start).total_seconds() // 60) for start, end in intervals)
         usable_minutes = int(total_minutes * (1 - buffer_ratio))
         if usable_minutes <= 0:
             day += timedelta(days=1)
@@ -268,20 +418,23 @@ def generate_final_week_plan(
             if not block:
                 break
             start_at, end_at = block
-            priority = _priority(exam, day) + 0.25
             event = {
-                "title": f"{exam.course_name} D-复盘",
+                "title": f"{exam.course_name} D-Review",
                 "course_id": exam.course_id,
                 "start_at": start_at.isoformat(timespec="minutes"),
                 "end_at": end_at.isoformat(timespec="minutes"),
                 "event_type": "mandatory_review",
-                "priority": round(priority, 4),
+                "priority": round(_priority(exam, day) + 0.25, 4),
                 "source": "planner",
             }
             created_events.append(event)
             usable_minutes -= duration
 
-        block_pattern = [("deep", deep_block_minutes), ("deep", deep_block_minutes), ("review", review_block_minutes)]
+        block_pattern = [
+            ("deep", deep_block_minutes),
+            ("deep", deep_block_minutes),
+            ("review", review_block_minutes),
+        ]
         block_index = 0
         min_block = min(deep_block_minutes, review_block_minutes)
 
@@ -298,12 +451,11 @@ def generate_final_week_plan(
             if not active_exams:
                 break
 
-            dynamic_scores = []
+            dynamic_scores: List[float] = []
             for exam in active_exams:
                 base = _priority(exam, start_date)
                 daily = _priority(exam, day)
-                score = 0.7 * base + 0.3 * daily
-                dynamic_scores.append(score)
+                dynamic_scores.append(0.7 * base + 0.3 * daily)
 
             score_tensor = torch.tensor(dynamic_scores, dtype=torch.float32)
             ranking = torch.argsort(score_tensor, descending=True).tolist()
@@ -313,18 +465,15 @@ def generate_final_week_plan(
             block = _take_interval(intervals, duration)
             if not block:
                 break
-            start_at, end_at = block
-            priority = _priority(chosen_exam, day)
-            event_type = "deep_study" if mode == "deep" else "review"
-            title_suffix = "深度学习" if mode == "deep" else "回顾复盘"
 
+            start_at, end_at = block
             event = {
-                "title": f"{chosen_exam.course_name} {title_suffix}",
+                "title": f"{chosen_exam.course_name} {'Deep Study' if mode == 'deep' else 'Review'}",
                 "course_id": chosen_exam.course_id,
                 "start_at": start_at.isoformat(timespec="minutes"),
                 "end_at": end_at.isoformat(timespec="minutes"),
-                "event_type": event_type,
-                "priority": round(priority, 4),
+                "event_type": "deep_study" if mode == "deep" else "review",
+                "priority": round(_priority(chosen_exam, day), 4),
                 "source": "planner",
             }
             created_events.append(event)
@@ -380,4 +529,151 @@ def list_events(conn: Any, start_date: date, end_date: date) -> List[Dict[str, A
             }
         )
     return events
+
+
+def analyze_plan(conn: Any, start_date: date, end_date: date) -> Dict[str, Any]:
+    events = list_events(conn, start_date=start_date, end_date=end_date)
+    if not events:
+        return {
+            "total_events": 0,
+            "total_minutes": 0,
+            "total_hours": 0.0,
+            "deep_hours": 0.0,
+            "review_hours": 0.0,
+            "mandatory_review_hours": 0.0,
+            "load_stability": 1.0,
+            "by_course_hours": {},
+            "by_day_hours": {},
+        }
+
+    total_minutes = 0
+    deep_minutes = 0
+    review_minutes = 0
+    mandatory_minutes = 0
+    by_course_minutes: Dict[str, int] = {}
+    by_day_minutes: Dict[str, int] = {}
+
+    for event in events:
+        minutes = _event_minutes(event["start_at"], event["end_at"])
+        total_minutes += minutes
+        if event["event_type"] == "deep_study":
+            deep_minutes += minutes
+        elif event["event_type"] == "review":
+            review_minutes += minutes
+        elif event["event_type"] == "mandatory_review":
+            mandatory_minutes += minutes
+
+        course_name = event.get("course_name") or "Unknown"
+        by_course_minutes[course_name] = by_course_minutes.get(course_name, 0) + minutes
+
+        day_key = datetime.fromisoformat(event["start_at"]).date().isoformat()
+        by_day_minutes[day_key] = by_day_minutes.get(day_key, 0) + minutes
+
+    day_values = list(by_day_minutes.values())
+    if day_values:
+        tensor = torch.tensor(day_values, dtype=torch.float32)
+        mean_load = float(tensor.mean().item())
+        std_load = float(tensor.std(unbiased=False).item())
+    else:
+        mean_load = 0.0
+        std_load = 0.0
+
+    load_stability = 1.0
+    if mean_load > 0:
+        load_stability = max(0.0, min(1.0, 1 - (std_load / mean_load)))
+
+    return {
+        "total_events": len(events),
+        "total_minutes": total_minutes,
+        "total_hours": round(total_minutes / 60.0, 2),
+        "deep_hours": round(deep_minutes / 60.0, 2),
+        "review_hours": round(review_minutes / 60.0, 2),
+        "mandatory_review_hours": round(mandatory_minutes / 60.0, 2),
+        "load_stability": round(load_stability, 4),
+        "by_course_hours": {k: round(v / 60.0, 2) for k, v in sorted(by_course_minutes.items())},
+        "by_day_hours": {k: round(v / 60.0, 2) for k, v in sorted(by_day_minutes.items())},
+    }
+
+
+def _expand_fixed_events(conn: Any, start_date: date, end_date: date) -> List[Dict[str, Any]]:
+    by_weekday = _fetch_fixed_events_by_weekday(conn)
+    expanded: List[Dict[str, Any]] = []
+
+    day = start_date
+    while day <= end_date:
+        for event in by_weekday.get(day.weekday(), []):
+            start_at = datetime.combine(day, _parse_time(event.start_time))
+            end_at = datetime.combine(day, _parse_time(event.end_time))
+            if end_at <= start_at:
+                continue
+            expanded.append(
+                {
+                    "event_id": None,
+                    "title": event.title,
+                    "course_id": None,
+                    "course_name": None,
+                    "start_at": start_at.isoformat(timespec="minutes"),
+                    "end_at": end_at.isoformat(timespec="minutes"),
+                    "event_type": event.event_type,
+                    "priority": 0.0,
+                    "source": "fixed",
+                }
+            )
+        day += timedelta(days=1)
+    return expanded
+
+
+def _ics_escape(value: str) -> str:
+    return value.replace("\\", "\\\\").replace(",", "\\,").replace(";", "\\;").replace("\n", "\\n")
+
+
+def _to_ics_datetime(value: str) -> str:
+    dt = datetime.fromisoformat(value)
+    return dt.strftime("%Y%m%dT%H%M00")
+
+
+def _render_ics(events: Iterable[Dict[str, Any]]) -> str:
+    timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//Yumi//Study Planner//CN",
+        "CALSCALE:GREGORIAN",
+    ]
+
+    for idx, event in enumerate(events, start=1):
+        uid = f"yumi-{idx}-{event['start_at'].replace(':', '').replace('-', '')}@local"
+        summary = _ics_escape(event["title"])
+        description = _ics_escape(
+            f"type={event['event_type']};source={event['source']};priority={event.get('priority', 0)}"
+        )
+        lines.extend(
+            [
+                "BEGIN:VEVENT",
+                f"UID:{uid}",
+                f"DTSTAMP:{timestamp}",
+                f"DTSTART:{_to_ics_datetime(event['start_at'])}",
+                f"DTEND:{_to_ics_datetime(event['end_at'])}",
+                f"SUMMARY:{summary}",
+                f"DESCRIPTION:{description}",
+                "END:VEVENT",
+            ]
+        )
+
+    lines.append("END:VCALENDAR")
+    return "\r\n".join(lines) + "\r\n"
+
+
+def export_plan_ics(
+    conn: Any,
+    start_date: date,
+    end_date: date,
+    include_fixed: bool = True,
+) -> str:
+    planner_events = list_events(conn, start_date=start_date, end_date=end_date)
+    merged_events = list(planner_events)
+    if include_fixed:
+        merged_events.extend(_expand_fixed_events(conn, start_date=start_date, end_date=end_date))
+    merged_events.sort(key=lambda x: x["start_at"])
+    return _render_ics(merged_events)
 

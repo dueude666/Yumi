@@ -1,13 +1,15 @@
 from datetime import date
 from typing import Any, Dict, List
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Response
 
 from app.api.schemas import (
     AvailabilityReplaceRequest,
     CourseCreate,
     ExamCreateRequest,
     FinalWeekPlanRequest,
+    FixedEventReplaceRequest,
+    FixedEventRequest,
     MaterialIngestRequest,
     NoteSummaryRequest,
     QARequest,
@@ -16,11 +18,16 @@ from app.core.db import get_db, init_db
 from app.rag.repository import add_material_text
 from app.services.note_service import summarize_note
 from app.services.planner_service import (
+    add_fixed_event,
+    analyze_plan,
     add_exam,
+    export_plan_ics,
     generate_final_week_plan,
     list_availability,
     list_events,
     list_exams,
+    list_fixed_events,
+    replace_fixed_events,
     replace_availability,
 )
 from app.services.qa_service import ask_local_question
@@ -136,6 +143,30 @@ def get_availability(conn: Any = Depends(get_conn)) -> Dict[str, Any]:
     return {"slots": list_availability(conn)}
 
 
+@app.post("/planner/fixed-events")
+def create_fixed_event(payload: FixedEventRequest, conn: Any = Depends(get_conn)) -> Dict[str, Any]:
+    return add_fixed_event(
+        conn=conn,
+        title=payload.title,
+        weekday=payload.weekday,
+        start_time=payload.start_time,
+        end_time=payload.end_time,
+        event_type=payload.event_type,
+    )
+
+
+@app.put("/planner/fixed-events")
+def set_fixed_events(payload: FixedEventReplaceRequest, conn: Any = Depends(get_conn)) -> Dict[str, Any]:
+    events = [event.model_dump() for event in payload.events]
+    result = replace_fixed_events(conn, events)
+    return {"events": result}
+
+
+@app.get("/planner/fixed-events")
+def get_fixed_events(conn: Any = Depends(get_conn)) -> Dict[str, Any]:
+    return {"events": list_fixed_events(conn)}
+
+
 @app.post("/planner/final-week-plan")
 def build_final_week_plan(payload: FinalWeekPlanRequest, conn: Any = Depends(get_conn)) -> Dict[str, Any]:
     if payload.start_date > payload.end_date:
@@ -162,3 +193,35 @@ def get_plan_events(
     events = list_events(conn, start_date=start_date, end_date=end_date)
     return {"events": events, "count": len(events)}
 
+
+@app.get("/planner/analysis")
+def get_plan_analysis(
+    start_date: date = Query(...),
+    end_date: date = Query(...),
+    conn: Any = Depends(get_conn),
+) -> Dict[str, Any]:
+    if start_date > end_date:
+        raise HTTPException(status_code=400, detail="start_date must be <= end_date")
+    return analyze_plan(conn, start_date=start_date, end_date=end_date)
+
+
+@app.get("/planner/export/ics")
+def export_ics(
+    start_date: date = Query(...),
+    end_date: date = Query(...),
+    include_fixed: bool = Query(default=True),
+    conn: Any = Depends(get_conn),
+) -> Response:
+    if start_date > end_date:
+        raise HTTPException(status_code=400, detail="start_date must be <= end_date")
+    content = export_plan_ics(
+        conn,
+        start_date=start_date,
+        end_date=end_date,
+        include_fixed=include_fixed,
+    )
+    return Response(
+        content=content,
+        media_type="text/calendar",
+        headers={"Content-Disposition": "attachment; filename=yumi_schedule.ics"},
+    )

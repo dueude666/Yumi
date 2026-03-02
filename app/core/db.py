@@ -62,6 +62,19 @@ CREATE TABLE IF NOT EXISTS availability_slots (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS fixed_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    weekday INTEGER NOT NULL CHECK(weekday >= 0 AND weekday <= 6),
+    start_time TEXT NOT NULL,
+    end_time TEXT NOT NULL,
+    event_type TEXT NOT NULL DEFAULT 'fixed',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_fixed_events_weekday
+ON fixed_events(weekday, start_time);
+
 CREATE TABLE IF NOT EXISTS study_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT NOT NULL,
@@ -102,4 +115,3 @@ def get_db() -> Iterator[sqlite3.Connection]:
         yield conn
     finally:
         conn.close()
-
