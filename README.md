@@ -5,6 +5,7 @@ It is designed for offline deployment and local data residency.
 
 ## Current Features
 - Course and material management (local text ingestion + chunking)
+- Material file upload (`txt/md/pdf/image`) with OCR for image notes
 - Note summarization (summary + keywords)
 - Local QA with source excerpts
 - Final-week schedule generation
@@ -59,6 +60,7 @@ Planner rules:
 - `POST /courses`
 - `GET /courses`
 - `POST /courses/{course_id}/materials`
+- `POST /courses/{course_id}/materials/upload`
 - `POST /notes/summarize`
 - `POST /qa/ask`
 - `POST /planner/exams`
@@ -83,8 +85,10 @@ Planner rules:
 - `study_events`
 
 ## Next Extensions
-- PDF and OCR ingestion
 - Local ASR for lecture recordings
 - FAISS embedding retrieval
 - Personal knowledge graph per course
 
+## OCR Runtime Note
+Image OCR uses `pytesseract`, which requires local Tesseract OCR binary installation.
+On Windows, install Tesseract and ensure `tesseract.exe` is in `PATH`.

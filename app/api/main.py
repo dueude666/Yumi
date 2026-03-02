@@ -1,7 +1,7 @@
 from datetime import date
 from typing import Any, Dict, List
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Response
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Response, UploadFile
 
 from app.api.schemas import (
     AvailabilityReplaceRequest,
@@ -16,6 +16,7 @@ from app.api.schemas import (
 )
 from app.core.db import get_db, init_db
 from app.rag.repository import add_material_text
+from app.services.ingest_service import ingest_uploaded_material
 from app.services.note_service import summarize_note
 from app.services.planner_service import (
     add_fixed_event,
@@ -94,6 +95,36 @@ def ingest_material(course_id: int, payload: MaterialIngestRequest, conn: Any = 
         page_number=payload.page_number,
     )
     return {"course_id": course_id, "inserted_chunks": inserted_chunks}
+
+
+@app.post("/courses/{course_id}/materials/upload")
+async def ingest_material_upload(
+    course_id: int,
+    file: UploadFile = File(...),
+    source_name: str = Form(default=""),
+    conn: Any = Depends(get_conn),
+) -> Dict[str, Any]:
+    course = conn.execute("SELECT id FROM courses WHERE id = ?", (course_id,)).fetchone()
+    if not course:
+        raise HTTPException(status_code=404, detail="course not found")
+
+    filename = file.filename or "uploaded_file"
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="uploaded file is empty")
+
+    try:
+        result = ingest_uploaded_material(
+            conn=conn,
+            course_id=course_id,
+            filename=filename,
+            file_bytes=file_bytes,
+            source_name=source_name or filename,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return result
 
 
 @app.post("/notes/summarize")

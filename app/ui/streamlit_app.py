@@ -21,6 +21,19 @@ def api_call(method: str, path: str, payload: Optional[Dict[str, Any]] = None) -
         return None
 
 
+def api_upload(path: str, files: Dict[str, Any], data: Optional[Dict[str, Any]] = None) -> Any:
+    url = f"{API_BASE}{path}"
+    try:
+        response = requests.post(url=url, files=files, data=data or {}, timeout=60)
+        response.raise_for_status()
+        if response.headers.get("content-type", "").startswith("application/json"):
+            return response.json()
+        return response.text
+    except requests.RequestException as exc:
+        st.error(f"Upload failed: {exc}")
+        return None
+
+
 def fetch_courses() -> List[Dict[str, Any]]:
     result = api_call("GET", "/courses")
     return result if isinstance(result, list) else []
@@ -280,6 +293,38 @@ def render_material_tab(course_options: Dict[str, int]) -> None:
         if isinstance(result, dict):
             st.success(f"Inserted {result['inserted_chunks']} chunks.")
 
+    st.markdown("---")
+    st.subheader("File Upload (PDF / OCR)")
+    uploaded = st.file_uploader(
+        "Upload file",
+        type=["txt", "md", "pdf", "png", "jpg", "jpeg", "bmp", "tiff"],
+        accept_multiple_files=False,
+    )
+    upload_source_name = st.text_input(
+        "Source alias (optional)",
+        value="",
+        placeholder="defaults to filename",
+    )
+    if st.button("Ingest uploaded file"):
+        if uploaded is None:
+            st.warning("Please choose a file first.")
+            return
+        files = {
+            "file": (uploaded.name, uploaded.getvalue(), uploaded.type or "application/octet-stream"),
+        }
+        data = {"source_name": upload_source_name.strip() or uploaded.name}
+        result = api_upload(
+            path=f"/courses/{course_options[ingest_course]}/materials/upload",
+            files=files,
+            data=data,
+        )
+        if isinstance(result, dict):
+            st.success(
+                "Uploaded successfully: "
+                f"{result.get('inserted_chunks', 0)} chunks, "
+                f"{result.get('ingested_pages', 0)} pages."
+            )
+
 
 def main() -> None:
     st.set_page_config(page_title="Yumi", page_icon="Y", layout="wide")
@@ -314,4 +359,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
