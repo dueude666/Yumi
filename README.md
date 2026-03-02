@@ -66,6 +66,19 @@ Optional environment variables:
 - `YUMI_API_PORT` (default `8000`)
 - `YUMI_DEV_RELOAD` (`1` to enable API hot reload)
 
+## Native App (Android)
+Android app shell is included at:
+`mobile/yumi-android`
+
+It provides:
+- installable APK
+- server URL input and persistence
+- full WebView access to Yumi
+- file picker support for upload workflows
+
+Build instructions:
+see [mobile/yumi-android/README.md](mobile/yumi-android/README.md)
+
 ## Scheduling Logic
 Course priority score:
 
