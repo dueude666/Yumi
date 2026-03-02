@@ -6,6 +6,12 @@ It is designed for offline deployment and local data residency.
 ## Current Features
 - Course and material management (local text ingestion + chunking)
 - Material file upload (`txt/md/pdf/image`) with OCR for image notes
+- Classroom audio intelligent assistant:
+  - offline lecture transcription + summary
+  - custom terminology normalization
+  - simple speaker diarization (Speaker A/B)
+  - Anki flashcard CSV export
+  - batch processing with progress visualization
 - Note summarization (summary + keywords)
 - Local QA with source excerpts
 - Final-week schedule generation
@@ -61,6 +67,11 @@ Planner rules:
 - `GET /courses`
 - `POST /courses/{course_id}/materials`
 - `POST /courses/{course_id}/materials/upload`
+- `POST /audio/process-upload`
+- `GET /audio/transcripts?course_id=&limit=`
+- `GET /audio/{transcript_id}/anki.csv`
+- `POST /glossary/terms`
+- `GET /glossary/terms`
 - `POST /notes/summarize`
 - `POST /qa/ask`
 - `POST /planner/exams`
@@ -85,9 +96,27 @@ Planner rules:
 - `study_events`
 
 ## Next Extensions
-- Local ASR for lecture recordings
+- Higher-accuracy domain ASR model packs
 - FAISS embedding retrieval
 - Personal knowledge graph per course
+
+## Audio Assistant Positioning
+- Problem solved:
+  - students/teachers spend too much time turning lecture recordings into structured notes
+  - manual transcription is slow and key points are hard to extract
+- Core promise:
+  - data stays on device from audio input to note output
+  - no network requests during inference (except first-time model download if not cached)
+- Typical scenarios:
+  - lecture recording review
+  - seminar archive
+  - group discussion minutes
+  - language listening recap
+- Target users:
+  - undergraduates (heavy coursework in engineering/medical majors)
+  - postgraduates
+  - teachers
+  - self-learners
 
 ## OCR Runtime Note
 Image OCR uses `pytesseract`, which requires local Tesseract OCR binary installation.

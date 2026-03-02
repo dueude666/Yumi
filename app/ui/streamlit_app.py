@@ -48,6 +48,11 @@ def fetch_ics(start_date: date, end_date: date, include_fixed: bool) -> Optional
     return result if isinstance(result, str) else None
 
 
+def fetch_anki_csv(transcript_id: int) -> Optional[str]:
+    result = api_call("GET", f"/audio/{transcript_id}/anki.csv")
+    return result if isinstance(result, str) else None
+
+
 def render_course_sidebar() -> None:
     st.sidebar.header("Course")
     new_course_name = st.sidebar.text_input("Course name", placeholder="Advanced Mathematics")
@@ -326,6 +331,149 @@ def render_material_tab(course_options: Dict[str, int]) -> None:
             )
 
 
+def render_glossary_manager() -> None:
+    st.subheader("Custom Terminology")
+    c1, c2, c3 = st.columns(3)
+    term = c1.text_input("Term", key="glossary_term")
+    canonical = c2.text_input("Canonical", key="glossary_canonical")
+    description = c3.text_input("Description", key="glossary_description")
+    if st.button("Add term"):
+        if not term.strip():
+            st.warning("Term is required.")
+        else:
+            payload = {
+                "term": term.strip(),
+                "canonical": canonical.strip(),
+                "description": description.strip(),
+            }
+            result = api_call("POST", "/glossary/terms", payload)
+            if isinstance(result, dict):
+                st.success(f"Term ready: {result['term']}")
+
+    terms_result = api_call("GET", "/glossary/terms")
+    terms = terms_result.get("terms", []) if isinstance(terms_result, dict) else []
+    if terms:
+        st.dataframe(terms, use_container_width=True)
+    else:
+        st.info("No terms yet.")
+
+
+def render_audio_tab(course_options: Dict[str, int]) -> None:
+    st.subheader("Classroom Audio Assistant")
+    st.caption(
+        "Offline pipeline: transcription -> speaker split -> structured notes -> Anki export."
+    )
+    if not course_options:
+        st.info("Create a course first.")
+        return
+
+    render_glossary_manager()
+    st.markdown("---")
+
+    course_label = st.selectbox("Course", options=list(course_options.keys()), key="audio_course")
+    source_prefix = st.text_input("Source prefix", value="lecture_audio", key="audio_source_prefix")
+    language = st.selectbox("Language hint", options=["", "zh", "en"], format_func=lambda x: "auto" if not x else x, key="audio_language")
+    model_id = st.text_input("ASR model", value="openai/whisper-small", key="audio_model")
+    diarize = st.checkbox("Enable simple speaker diarization (A/B)", value=True, key="audio_diarize")
+    local_only = st.checkbox("Local model files only (no network)", value=False, key="audio_local_only")
+
+    uploads = st.file_uploader(
+        "Upload audio files",
+        type=["wav", "mp3", "m4a", "flac", "ogg"],
+        accept_multiple_files=True,
+        key="audio_uploads",
+    )
+
+    if st.button("Process batch audio"):
+        if not uploads:
+            st.warning("Upload at least one audio file.")
+            return
+
+        progress = st.progress(0.0)
+        status_rows: List[Dict[str, Any]] = []
+        detail_results: List[Dict[str, Any]] = []
+        total = len(uploads)
+        course_id = course_options[course_label]
+
+        for idx, audio_file in enumerate(uploads, start=1):
+            source_name = f"{source_prefix}_{idx}_{audio_file.name}"
+            files = {
+                "file": (
+                    audio_file.name,
+                    audio_file.getvalue(),
+                    audio_file.type or "application/octet-stream",
+                )
+            }
+            data = {
+                "course_id": str(course_id),
+                "source_name": source_name,
+                "language": language,
+                "diarize": "true" if diarize else "false",
+                "model_id": model_id.strip() or "openai/whisper-small",
+                "local_only": "true" if local_only else "false",
+            }
+            result = api_upload("/audio/process-upload", files=files, data=data)
+            if isinstance(result, dict) and "transcript_id" in result:
+                status_rows.append(
+                    {
+                        "file": audio_file.name,
+                        "status": "ok",
+                        "transcript_id": result.get("transcript_id"),
+                        "duration_seconds": result.get("duration_seconds"),
+                        "flashcards": result.get("flashcard_count"),
+                    }
+                )
+                detail_results.append(result)
+            else:
+                status_rows.append({"file": audio_file.name, "status": "failed"})
+
+            progress.progress(idx / total, text=f"Processed {idx}/{total}")
+
+        st.session_state["audio_batch_status"] = status_rows
+        st.session_state["audio_batch_details"] = detail_results
+        st.success("Batch processing complete.")
+
+    status_rows = st.session_state.get("audio_batch_status", [])
+    if status_rows:
+        st.markdown("**Batch status**")
+        st.dataframe(status_rows, use_container_width=True)
+
+    details = st.session_state.get("audio_batch_details", [])
+    for item in details:
+        transcript_id = item.get("transcript_id")
+        with st.expander(f"Transcript #{transcript_id} - {item.get('source_name')}"):
+            st.markdown("**Summary**")
+            st.write(item.get("summary", ""))
+
+            st.markdown("**Structured Notes**")
+            st.json(item.get("structured_notes", {}))
+
+            segments = item.get("speaker_segments", [])
+            if segments:
+                st.markdown("**Speaker Segments**")
+                st.dataframe(segments, use_container_width=True)
+
+            csv_content = fetch_anki_csv(int(transcript_id))
+            if csv_content:
+                st.download_button(
+                    label=f"Download Anki CSV #{transcript_id}",
+                    data=csv_content,
+                    file_name=f"anki_{transcript_id}.csv",
+                    mime="text/csv",
+                )
+
+    st.markdown("---")
+    st.subheader("Recent Transcript Records")
+    course_filter = st.checkbox("Filter by selected course", value=True, key="transcript_filter_course")
+    params = f"?limit=20&course_id={course_options[course_label]}" if course_filter else "?limit=20"
+    records = api_call("GET", f"/audio/transcripts{params}")
+    items = records.get("items", []) if isinstance(records, dict) else []
+    if items:
+        st.dataframe(items, use_container_width=True)
+    else:
+        st.info("No transcript records yet.")
+
+
 def main() -> None:
     st.set_page_config(page_title="Yumi", page_icon="Y", layout="wide")
     st.title("Yumi - Local Campus Study Assistant")
@@ -339,7 +487,7 @@ def main() -> None:
     courses = fetch_courses()
     course_options = {item["name"]: item["course_id"] for item in courses}
 
-    tabs = st.tabs(["Planner", "Notes", "QA", "Materials"])
+    tabs = st.tabs(["Planner", "Notes", "QA", "Materials", "Audio Assistant"])
 
     with tabs[0]:
         render_exam_section(course_options)
@@ -355,6 +503,9 @@ def main() -> None:
 
     with tabs[3]:
         render_material_tab(course_options)
+
+    with tabs[4]:
+        render_audio_tab(course_options)
 
 
 if __name__ == "__main__":

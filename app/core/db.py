@@ -27,6 +27,14 @@ CREATE TABLE IF NOT EXISTS notes (
     FOREIGN KEY(course_id) REFERENCES courses(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS term_dictionary (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    term TEXT NOT NULL UNIQUE,
+    canonical TEXT,
+    description TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS document_chunks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     course_id INTEGER NOT NULL,
@@ -39,6 +47,25 @@ CREATE TABLE IF NOT EXISTS document_chunks (
 
 CREATE INDEX IF NOT EXISTS idx_document_chunks_course_id
 ON document_chunks(course_id);
+
+CREATE TABLE IF NOT EXISTS transcripts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    course_id INTEGER NOT NULL,
+    source_name TEXT NOT NULL,
+    language TEXT,
+    raw_text TEXT NOT NULL,
+    normalized_text TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    structured_notes TEXT NOT NULL,
+    speaker_segments TEXT NOT NULL,
+    glossary_hits TEXT NOT NULL,
+    flashcards TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY(course_id) REFERENCES courses(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_transcripts_course_id
+ON transcripts(course_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS exams (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

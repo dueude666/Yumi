@@ -10,12 +10,15 @@ from app.api.schemas import (
     FinalWeekPlanRequest,
     FixedEventReplaceRequest,
     FixedEventRequest,
+    GlossaryTermCreate,
     MaterialIngestRequest,
     NoteSummaryRequest,
     QARequest,
 )
 from app.core.db import get_db, init_db
 from app.rag.repository import add_material_text
+from app.services.audio_service import export_anki_csv, list_transcripts, process_audio_upload
+from app.services.glossary_service import add_term, list_terms
 from app.services.ingest_service import ingest_uploaded_material
 from app.services.note_service import summarize_note
 from app.services.planner_service import (
@@ -81,6 +84,24 @@ def get_courses(conn: Any = Depends(get_conn)) -> List[Dict[str, Any]]:
     ]
 
 
+@app.post("/glossary/terms")
+def create_glossary_term(payload: GlossaryTermCreate, conn: Any = Depends(get_conn)) -> Dict[str, Any]:
+    try:
+        return add_term(
+            conn=conn,
+            term=payload.term,
+            canonical=payload.canonical,
+            description=payload.description,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/glossary/terms")
+def get_glossary_terms(conn: Any = Depends(get_conn)) -> Dict[str, Any]:
+    return {"terms": list_terms(conn)}
+
+
 @app.post("/courses/{course_id}/materials")
 def ingest_material(course_id: int, payload: MaterialIngestRequest, conn: Any = Depends(get_conn)) -> Dict[str, Any]:
     course = conn.execute("SELECT id FROM courses WHERE id = ?", (course_id,)).fetchone()
@@ -125,6 +146,64 @@ async def ingest_material_upload(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return result
+
+
+@app.post("/audio/process-upload")
+async def process_audio(
+    course_id: int = Form(...),
+    file: UploadFile = File(...),
+    source_name: str = Form(default=""),
+    language: str = Form(default=""),
+    diarize: bool = Form(default=True),
+    model_id: str = Form(default="openai/whisper-small"),
+    local_only: bool = Form(default=False),
+    conn: Any = Depends(get_conn),
+) -> Dict[str, Any]:
+    course = conn.execute("SELECT id FROM courses WHERE id = ?", (course_id,)).fetchone()
+    if not course:
+        raise HTTPException(status_code=404, detail="course not found")
+
+    filename = file.filename or "audio_file.wav"
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="uploaded file is empty")
+
+    try:
+        return process_audio_upload(
+            conn=conn,
+            course_id=course_id,
+            source_name=(source_name or filename).strip(),
+            filename=filename,
+            file_bytes=file_bytes,
+            language=language.strip() or None,
+            diarize=bool(diarize),
+            model_id=model_id.strip() or "openai/whisper-small",
+            local_only=bool(local_only),
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/audio/transcripts")
+def get_transcripts(
+    course_id: int | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    conn: Any = Depends(get_conn),
+) -> Dict[str, Any]:
+    return {"items": list_transcripts(conn, course_id=course_id, limit=limit)}
+
+
+@app.get("/audio/{transcript_id}/anki.csv")
+def get_anki_csv(transcript_id: int, conn: Any = Depends(get_conn)) -> Response:
+    try:
+        csv_content = export_anki_csv(conn, transcript_id=transcript_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return Response(
+        content=csv_content,
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=anki_{transcript_id}.csv"},
+    )
 
 
 @app.post("/notes/summarize")

@@ -1,5 +1,6 @@
 from io import BytesIO
 from pathlib import Path
+from shutil import which
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.rag.repository import add_material_text
@@ -52,6 +53,15 @@ def _extract_image_text(data: bytes) -> str:
         import pytesseract  # type: ignore
     except ImportError as exc:
         raise RuntimeError("pytesseract is required for image OCR.") from exc
+
+    if which("tesseract") is None:
+        default_path = Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe")
+        if default_path.exists():
+            pytesseract.pytesseract.tesseract_cmd = str(default_path)
+        else:
+            raise RuntimeError(
+                "tesseract executable not found. Install it or add to PATH."
+            )
 
     image = Image.open(BytesIO(data))
     return pytesseract.image_to_string(image, lang="chi_sim+eng").strip()
@@ -118,4 +128,3 @@ def ingest_uploaded_material(
         "total_chars": total_chars,
         "file_type": ext or "text",
     }
-

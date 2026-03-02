@@ -9,6 +9,12 @@ class CourseCreate(BaseModel):
     code: Optional[str] = Field(default=None, max_length=50)
 
 
+class GlossaryTermCreate(BaseModel):
+    term: str = Field(min_length=1, max_length=100)
+    canonical: str = Field(default="", max_length=100)
+    description: str = Field(default="", max_length=300)
+
+
 class MaterialIngestRequest(BaseModel):
     source_name: str = Field(min_length=1, max_length=120)
     text: str = Field(min_length=1)
