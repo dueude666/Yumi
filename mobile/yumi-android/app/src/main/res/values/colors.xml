@@ -2,5 +2,10 @@
 <resources>
     <color name="bg">#FFFFFF</color>
     <color name="fg">#121212</color>
+    <color name="surface_bg">#F4F7FB</color>
+    <color name="card_bg">#FFFFFF</color>
+    <color name="brand_primary">#0B6A4F</color>
+    <color name="brand_primary_dark">#084E3B</color>
+    <color name="text_primary">#1D2735</color>
+    <color name="text_secondary">#5E6978</color>
 </resources>
-

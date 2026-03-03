@@ -1,6 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Yumi Mobile</string>
-    <string name="connect">Connect</string>
+    <string name="connect">连接服务器</string>
+    <string name="open_browser">浏览器打开</string>
+    <string name="server_address">Yumi 服务地址</string>
+    <string name="server_hint">http://192.168.x.x:8501</string>
+    <string name="status_idle">等待连接</string>
+    <string name="status_loading">正在加载：%1$s</string>
+    <string name="status_connected">已连接：%1$s</string>
+    <string name="status_failed">连接失败，请检查地址与局域网</string>
+    <string name="status_open_external_failed">无法打开系统浏览器</string>
+    <string name="nav_dashboard">总览</string>
+    <string name="nav_planner">期末计划</string>
+    <string name="nav_notes">笔记总结</string>
+    <string name="nav_qa">问答</string>
+    <string name="nav_materials">资料导入</string>
+    <string name="nav_audio">课堂音频</string>
 </resources>
-

@@ -7,6 +7,17 @@ import requests
 import streamlit as st
 
 API_BASE = os.getenv("YUMI_API_URL", "http://127.0.0.1:8000")
+NAV_ITEMS = [
+    ("dashboard", "Dashboard"),
+    ("planner", "Planner"),
+    ("notes", "Notes"),
+    ("qa", "QA"),
+    ("materials", "Materials"),
+    ("audio", "Audio Assistant"),
+]
+NAV_PARAM_TO_LABEL = {key: label for key, label in NAV_ITEMS}
+NAV_LABEL_TO_PARAM = {label: key for key, label in NAV_ITEMS}
+NAV_LABELS = [label for _, label in NAV_ITEMS]
 
 
 def _get_local_ip() -> str:
@@ -25,6 +36,55 @@ def _parse_hhmm(value: str, default: time) -> time:
         return datetime.strptime(value, "%H:%M").time()
     except (TypeError, ValueError):
         return default
+
+
+def _read_query_params() -> Dict[str, str]:
+    if hasattr(st, "query_params"):
+        params: Dict[str, str] = {}
+        for key in st.query_params.keys():
+            value = st.query_params.get(key)
+            if isinstance(value, list):
+                params[key] = str(value[0]) if value else ""
+            else:
+                params[key] = "" if value is None else str(value)
+        return params
+
+    legacy = st.experimental_get_query_params()
+    output: Dict[str, str] = {}
+    for key, values in legacy.items():
+        if isinstance(values, list):
+            output[key] = str(values[0]) if values else ""
+        else:
+            output[key] = "" if values is None else str(values)
+    return output
+
+
+def _write_query_params(params: Dict[str, str]) -> None:
+    target = {key: str(value) for key, value in params.items()}
+    current = _read_query_params()
+    if current == target:
+        return
+
+    if hasattr(st, "query_params"):
+        for key in list(st.query_params.keys()):
+            if key not in target:
+                del st.query_params[key]
+        for key, value in target.items():
+            st.query_params[key] = value
+        return
+
+    st.experimental_set_query_params(**target)
+
+
+def _parse_bool_param(value: Optional[str]) -> Optional[bool]:
+    if value is None:
+        return None
+    lowered = value.strip().lower()
+    if lowered in {"1", "true", "yes", "on"}:
+        return True
+    if lowered in {"0", "false", "no", "off"}:
+        return False
+    return None
 
 
 def _inject_css(mobile_mode: bool) -> None:
@@ -126,9 +186,9 @@ def render_records(records: List[Dict[str, Any]], empty_text: str, mobile_mode: 
         st.dataframe(records, use_container_width=True)
 
 
-def render_sidebar() -> tuple[str, bool]:
+def render_sidebar(initial_nav: str, mobile_override: Optional[bool]) -> tuple[str, bool]:
     st.sidebar.title("Yumi")
-    mobile_mode = st.sidebar.toggle("Mobile mode", value=True)
+    mobile_mode = st.sidebar.toggle("Mobile mode", value=True if mobile_override is None else mobile_override)
     st.session_state["mobile_mode"] = mobile_mode
 
     st.sidebar.caption(f"API: `{API_BASE}`")
@@ -148,17 +208,13 @@ def render_sidebar() -> tuple[str, bool]:
             if isinstance(result, dict):
                 st.sidebar.success(f"Ready: {result['name']}")
 
-    nav = st.sidebar.radio(
-        "Navigation",
-        [
-            "Dashboard",
-            "Planner",
-            "Notes",
-            "QA",
-            "Materials",
-            "Audio Assistant",
-        ],
-    )
+    safe_nav = initial_nav if initial_nav in NAV_LABELS else "Dashboard"
+    nav = st.sidebar.radio("Navigation", NAV_LABELS, index=NAV_LABELS.index(safe_nav))
+
+    params = _read_query_params()
+    params["view"] = NAV_LABEL_TO_PARAM.get(nav, "dashboard")
+    params["mobile"] = "1" if mobile_mode else "0"
+    _write_query_params(params)
     return nav, mobile_mode
 
 
@@ -641,8 +697,13 @@ def render_audio_page(courses: List[Dict[str, Any]], mobile_mode: bool) -> None:
 
 
 def main() -> None:
-    st.set_page_config(page_title="Yumi", page_icon="Y", layout="centered")
-    nav, mobile_mode = render_sidebar()
+    st.set_page_config(page_title="Yumi", page_icon="Y", layout="centered", initial_sidebar_state="collapsed")
+
+    query = _read_query_params()
+    initial_nav = NAV_PARAM_TO_LABEL.get(query.get("view", "").lower(), "Dashboard")
+    mobile_override = _parse_bool_param(query.get("mobile"))
+
+    nav, mobile_mode = render_sidebar(initial_nav=initial_nav, mobile_override=mobile_override)
     _inject_css(mobile_mode)
     render_header()
 
@@ -663,4 +724,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
